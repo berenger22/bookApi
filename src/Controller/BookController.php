@@ -16,19 +16,27 @@ use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 use Sensio\Bundle\FrameworkExtraBundle\Configuration\IsGranted;
 use Symfony\Component\Serializer\Normalizer\AbstractNormalizer;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Contracts\Cache\ItemInterface;
+use Symfony\Contracts\Cache\TagAwareCacheInterface;
 
 class BookController extends AbstractController
 {
     #[Route('/api/books', name: 'app_book', methods:['GET'])]
-    public function getAllBooks(BookRepository $bookRepo, SerializerInterface $serializer, Request $request): JsonResponse
+    public function getAllBooks(BookRepository $bookRepo, SerializerInterface $serializer, Request $request, TagAwareCacheInterface $cachePool): JsonResponse
     {
         $page = $request->get('page',1);
         $limit = $request->get('limit', 3);
 
-
-        $books = $bookRepo->findAllByPaganitation($page, $limit);
-        $booksJson = $serializer->serialize($books, "json", ["groups" => "getBooks"]);
-        return new JsonResponse($booksJson, Response::HTTP_OK,[],true);
+        $idCache = 'getAllBooks-'.$page.'-'.$limit;
+        $booksJsonList = $cachePool->get($idCache, function (ItemInterface $item) use ($bookRepo, $page, $limit, $serializer){
+            echo "cache\n";
+            $item->tag("booksCache");
+            //Permet de préciser la durer du cache (60 secondes)
+            // $item->expiresAfter(60);
+            $bookList = $bookRepo->findAllByPaganitation($page, $limit);
+            return $serializer->serialize($bookList, "json", ["groups" => "getBooks"]);
+        });
+        return new JsonResponse($booksJsonList, Response::HTTP_OK,[],true);
     }
 
     #[Route('/api/books/{id}', name:'detail_book', methods:['GET'])]
@@ -80,8 +88,9 @@ class BookController extends AbstractController
 
     #[Route('/api/books/{id}', name:'delete_book', methods:['DELETE'])]
     #[IsGranted('ROLE_ADMIN', message: 'Vous n\'avez pas les droits suffisants pour supprimer un livre')]
-    public function getDeleteBook(Book $book, EntityManagerInterface $em) :JsonResponse
+    public function getDeleteBook(Book $book, EntityManagerInterface $em, TagAwareCacheInterface $cachePool) :JsonResponse
     {
+        $cachePool->invalidateTags(["booksCache"]);
         $em->remove($book);
         $em->flush();
         return new JsonResponse(null, Response::HTTP_NO_CONTENT);
